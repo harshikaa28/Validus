@@ -1,16 +1,41 @@
 import "./globals.css";
-import { JetBrains_Mono, Space_Grotesk } from "next/font/google";
+import { Inter, Outfit, JetBrains_Mono } from "next/font/google";
 import { cn } from "@/lib/utils";
 
-// Same fonts as agentmaxxin.xyz
-const spaceGrotesk = Space_Grotesk({ subsets: ["latin"], variable: "--font-space-grotesk" });
-const jetBrainsMono = JetBrains_Mono({ subsets: ["latin"], variable: "--font-jetbrains-mono" });
+const outfit = Outfit({
+  subsets: ["latin"],
+  variable: "--font-outfit",
+  display: "swap",
+});
 
-export const metadata = { title: "Agentic Starter" };
+const inter = Inter({
+  subsets: ["latin"],
+  variable: "--font-inter",
+  display: "swap",
+});
+
+const jetBrainsMono = JetBrains_Mono({
+  subsets: ["latin"],
+  variable: "--font-jetbrains-mono",
+  display: "swap",
+});
+
+export const metadata = {
+  title: "Validus AI Agent",
+  description: "Verify tickets and check resale prices with an AI agent.",
+};
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={cn("dark font-sans antialiased", spaceGrotesk.variable, jetBrainsMono.variable)}>
+    <html
+      lang="en"
+      className={cn(
+        "dark font-sans antialiased",
+        outfit.variable,
+        inter.variable,
+        jetBrainsMono.variable
+      )}
+    >
       <body>{children}</body>
     </html>
   );

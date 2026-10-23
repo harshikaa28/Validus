@@ -1,242 +1,317 @@
-/**
- * YOUR AGENT'S TOOLS
- *
- * A tool is just a function the agent is allowed to call.
- * Gemini reads the `description` to decide WHEN to use it,
- * and `parameters` to know WHAT to pass in.
- */
+import { ethers } from 'ethers';
 
-export type Tool = {
-  name: string;
-  description: string;
-  /** JSON Schema describing the inputs. */
-  parameters: object;
-  /** The code that runs when the agent calls this tool. */
-  run: (args: any, ctx: { baseUrl: string }) => Promise<unknown>;
-};
-
-// ─── MOCK TICKET DATABASE (Week 1) ───
-const TICKETS: Record<string, any> = {
-  "TKT-001": {
-    id: "TKT-001",
-    owner: "Priya",
-    event: "Coldplay @Bangalore Oct 15",
-    purchased_date: "2026-10-06",
-    price: 5000,
-    status: "active",
-    transferred: false,
+// Smart Contract Details - NEW CONTRACT
+const CONTRACT_ADDRESS = "0xd8b934580fcE35a11B58C6D73aDeE468a2833fa8";
+const CONTRACT_ABI = [
+  {
+    "inputs": [
+      { "internalType": "string", "name": "name", "type": "string" },
+      { "internalType": "string", "name": "location", "type": "string" },
+      { "internalType": "uint256", "name": "eventDate", "type": "uint256" },
+      { "internalType": "uint256", "name": "ticketPrice", "type": "uint256" },
+      { "internalType": "uint256", "name": "totalTickets", "type": "uint256" }
+    ],
+    "name": "createEvent",
+    "outputs": [{ "internalType": "uint256", "name": "", "type": "uint256" }],
+    "stateMutability": "nonpayable",
+    "type": "function"
   },
-  "TKT-002": {
-    id: "TKT-002",
-    owner: "Raj",
-    event: "Coldplay @Bangalore Oct 15",
-    purchased_date: "2026-10-05",
-    price: 5000,
-    status: "active",
-    transferred: false,
+  {
+    "inputs": [{ "internalType": "uint256", "name": "eventId", "type": "uint256" }],
+    "name": "buyTicket",
+    "outputs": [{ "internalType": "uint256", "name": "", "type": "uint256" }],
+    "stateMutability": "payable",
+    "type": "function"
   },
-  "FAKE-666": {
-    id: "FAKE-666",
-    owner: null,
-    event: "Coldplay @Bangalore Oct 15",
-    purchased_date: null,
-    price: null,
-    status: "invalid",
-    transferred: null,
+  {
+    "inputs": [{ "internalType": "uint256", "name": "tokenId", "type": "uint256" }],
+    "name": "verifyTicket",
+    "outputs": [{ "internalType": "bool", "name": "", "type": "bool" }],
+    "stateMutability": "view",
+    "type": "function"
   },
-};
-
-// ─── MOCK SELLER LISTINGS (Week 1) ───
-// Number of active resale listings each seller has for each event.
-const SELLER_LISTINGS: Record<string, Record<string, number>> = {
-  "SELL-001": { "Coldplay @Bangalore Oct 15": 6 },
-  "SELL-002": { "Coldplay @Bangalore Oct 15": 2 },
-  "SELL-003": { "Coldplay @Bangalore Oct 15": 4 },
-};
-
-const SCALPER_THRESHOLD = 4;
-
-// ─── MOCK EVENT DATA (Week 1, placeholder values) ───
-const EVENTS: Record<string, any> = {
-  "Coldplay @Bangalore Oct 15": {
-    event: "Coldplay @Bangalore Oct 15",
-    date: "2026-10-15",
-    venue: "[mock venue]",
-    total_tickets: 1000,
-    tickets_sold: 940,
+  {
+    "inputs": [{ "internalType": "uint256", "name": "eventId", "type": "uint256" }],
+    "name": "getEventDetails",
+    "outputs": [{
+      "components": [
+        { "internalType": "uint256", "name": "eventId", "type": "uint256" },
+        { "internalType": "string", "name": "name", "type": "string" },
+        { "internalType": "string", "name": "location", "type": "string" },
+        { "internalType": "uint256", "name": "eventDate", "type": "uint256" },
+        { "internalType": "address", "name": "organizer", "type": "address" },
+        { "internalType": "uint256", "name": "ticketPrice", "type": "uint256" },
+        { "internalType": "uint256", "name": "totalTickets", "type": "uint256" },
+        { "internalType": "uint256", "name": "ticketsSold", "type": "uint256" },
+        { "internalType": "bool", "name": "active", "type": "bool" }
+      ], "internalType": "struct ValidusTicket.Event", "name": "", "type": "tuple"
+    }],
+    "stateMutability": "view",
+    "type": "function"
   },
-};
-
-// Looks up one ticket. Used by verify_ticket and verify_tickets.
-function checkTicket(ticket_id: string) {
-  const ticket = TICKETS[ticket_id];
-  if (!ticket) {
-    return {
-      valid: false,
-      ticket_id,
-      status: "not_found",
-      message: "Ticket not found in system",
-    };
+  {
+    "inputs": [{ "internalType": "uint256", "name": "tokenId", "type": "uint256" }],
+    "name": "getTicketDetails",
+    "outputs": [{
+      "components": [
+        { "internalType": "uint256", "name": "ticketID", "type": "uint256" },
+        { "internalType": "uint256", "name": "eventID", "type": "uint256" },
+        { "internalType": "uint256", "name": "faceValue", "type": "uint256" },
+        { "internalType": "bool", "name": "forSale", "type": "bool" },
+        { "internalType": "uint256", "name": "resalePrice", "type": "uint256" },
+        { "internalType": "bool", "name": "redeemed", "type": "bool" }
+      ], "internalType": "struct ValidusTicket.Ticket", "name": "", "type": "tuple"
+    }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      { "internalType": "uint256", "name": "tokenId", "type": "uint256" },
+      { "internalType": "uint256", "name": "price", "type": "uint256" }
+    ],
+    "name": "setResalePrice",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [{ "internalType": "uint256", "name": "tokenId", "type": "uint256" }],
+    "name": "redeemTicket",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
   }
-  return {
-    valid: ticket.status === "active",
-    ticket_id: ticket.id,
-    owner: ticket.owner,
-    event: ticket.event,
-    purchased_date: ticket.purchased_date,
-    price: ticket.price,
-    transferred: ticket.transferred,
-    status: ticket.status,
-  };
-}
+];
 
-export const tools: Tool[] = [
-  // ─── 1. Wallet tool: read the agent's own wallet ───
-  {
-    name: "get_my_wallet",
-    description: "Get the agent's own wallet address and its ETH balance on Base Sepolia (testnet).",
-    parameters: { type: "object", properties: {} },
-    run: async () => {
-      const { getWalletAddress, getWalletBalance } = await import("./wallet");
-      return {
-        address: getWalletAddress(),
-        balance: await getWalletBalance(),
-        network: "Base Sepolia (testnet)",
-      };
-    },
-  },
+// Sepolia RPC
+const PUBLIC_RPC = "https://sepolia-rpc.ethereum.org";
 
-  // ─── 2. Validus: verify if a ticket is real ───
+// Initialize contract
+const provider = new ethers.JsonRpcProvider(PUBLIC_RPC);
+const contract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, provider);
+
+export const tools = [
   {
-    name: "verify_ticket",
-    description: "Verify if a concert/event ticket is real or fake. Returns ticket details and authenticity status.",
-    parameters: {
+    name: "create_event",
+    description: "Create a new event (organizer only)",
+    inputSchema: {
       type: "object",
       properties: {
-        ticket_id: { type: "string", description: "The ticket ID to verify, e.g., TKT-001" },
-      },
-      required: ["ticket_id"],
-    },
-    run: async ({ ticket_id }) => checkTicket(ticket_id),
-  },
-
-  // ─── 3. Validus: verify several tickets at once ───
-  {
-    name: "verify_tickets",
-    description: "Verify several concert/event tickets at once. Use when the user gives more than one ticket ID, or asks to check a list of tickets. Returns a verdict for each ticket.",
-    parameters: {
-      type: "object",
-      properties: {
-        ticket_ids: {
-          type: "array",
-          items: { type: "string" },
-          description: "List of ticket IDs to verify, e.g., [\"TKT-001\", \"FAKE-666\"]. Maximum 10.",
+        name: {
+          type: "string",
+          description: "Event name (e.g., 'Coldplay @ Bangalore')",
+        },
+        location: {
+          type: "string",
+          description: "Event location",
+        },
+        eventDate: {
+          type: "number",
+          description: "Event date as Unix timestamp",
+        },
+        ticketPrice: {
+          type: "number",
+          description: "Ticket price in wei",
+        },
+        totalTickets: {
+          type: "number",
+          description: "Total tickets available",
         },
       },
-      required: ["ticket_ids"],
-    },
-    run: async ({ ticket_ids }) => {
-      const ids: string[] = (ticket_ids ?? []).slice(0, 10);
-      const results = ids.map((id) => checkTicket(String(id)));
-      return {
-        count: results.length,
-        valid_count: results.filter((r) => r.valid).length,
-        results,
-      };
+      required: ["name", "location", "eventDate", "ticketPrice", "totalTickets"],
     },
   },
-
-  // ─── 4. Validus: check if a resale listing is overpriced ───
   {
-    name: "check_resale_price",
-    description: "Check whether a resale ticket listing is overpriced. The maximum allowed resale price is 1.5x the face value. Use when the user asks if a resale price is fair or allowed.",
-    parameters: {
+    name: "buy_ticket",
+    description: "Buy a ticket for an event",
+    inputSchema: {
       type: "object",
       properties: {
-        face_value: { type: "number", description: "Original ticket price in rupees, e.g. 5000" },
-        listing_price: { type: "number", description: "Price the seller is asking, in rupees" },
+        eventId: {
+          type: "number",
+          description: "Event ID to buy ticket for",
+        },
       },
-      required: ["face_value", "listing_price"],
-    },
-    run: async ({ face_value, listing_price }) => {
-      const max_cap = face_value * 1.5;
-      const allowed = listing_price <= max_cap;
-      return {
-        allowed,
-        face_value,
-        listing_price,
-        max_allowed_price: max_cap,
-        markup_multiple: Number((listing_price / face_value).toFixed(2)),
-        message: allowed
-          ? "Listing is within the 1.5x resale cap."
-          : `BLOCKED: listing is over the 1.5x cap by ₹${listing_price - max_cap}.`,
-      };
+      required: ["eventId"],
     },
   },
-
-  // ─── 5. Validus: flag sellers with too many listings for one event (rule S1) ───
   {
-    name: "flag_scalper",
-    description: "Check whether a seller is a suspected scalper. A seller with 4 or more active resale listings for the same event is flagged. Use when the user asks if a seller is a scalper, or asks about a seller's listings.",
-    parameters: {
+    name: "verify_ticket",
+    description: "Verify if a ticket is authentic",
+    inputSchema: {
       type: "object",
       properties: {
-        seller_id: { type: "string", description: "The seller ID, e.g., SELL-001" },
-        event: { type: "string", description: "The event name, e.g., Coldplay @Bangalore Oct 15" },
+        tokenId: {
+          type: "number",
+          description: "Ticket token ID",
+        },
       },
-      required: ["seller_id", "event"],
-    },
-    run: async ({ seller_id, event }) => {
-      const seller = SELLER_LISTINGS[seller_id];
-      if (!seller) {
-        return {
-          flagged: false,
-          seller_id,
-          status: "not_found",
-          message: "Seller not found in system",
-        };
-      }
-      const listings = seller[event] ?? 0;
-      const flagged = listings >= SCALPER_THRESHOLD;
-      return {
-        flagged,
-        seller_id,
-        event,
-        active_listings: listings,
-        threshold: SCALPER_THRESHOLD,
-        status: flagged ? "SCALPER_FLAGGED" : "OK",
-        message: flagged
-          ? `FLAGGED: ${listings} active listings for this event (limit is ${SCALPER_THRESHOLD}).`
-          : `OK: ${listings} active listing(s) for this event, under the limit of ${SCALPER_THRESHOLD}.`,
-      };
+      required: ["tokenId"],
     },
   },
-
-  // ─── 6. Validus: event details and remaining tickets ───
   {
     name: "get_event_info",
-    description: "Get details for an event: name, date, venue, and how many tickets remain. Use when the user asks about an event, its date or venue, or how many tickets are left.",
-    parameters: {
+    description: "Get details about an event",
+    inputSchema: {
       type: "object",
       properties: {
-        event: { type: "string", description: "The event name, e.g., Coldplay @Bangalore Oct 15" },
+        eventId: {
+          type: "number",
+          description: "Event ID",
+        },
       },
-      required: ["event"],
+      required: ["eventId"],
     },
-    run: async ({ event }) => {
-      const info = EVENTS[event];
-      if (!info) {
-        return { status: "not_found", message: "Event not found in system" };
-      }
-      return {
-        status: "found",
-        event: info.event,
-        date: info.date,
-        venue: info.venue,
-        total_tickets: info.total_tickets,
-        tickets_sold: info.tickets_sold,
-        tickets_remaining: info.total_tickets - info.tickets_sold,
-      };
+  },
+  {
+    name: "check_resale_price",
+    description: "Check if a resale price is within the 1.5x cap",
+    inputSchema: {
+      type: "object",
+      properties: {
+        tokenId: {
+          type: "number",
+          description: "Ticket token ID",
+        },
+        proposedPrice: {
+          type: "number",
+          description: "Proposed resale price in wei",
+        },
+      },
+      required: ["tokenId", "proposedPrice"],
     },
   },
 ];
+
+export async function processToolCall(toolName: string, toolInput: any) {
+  if (toolName === "create_event") {
+    return await createEvent(toolInput);
+  } else if (toolName === "buy_ticket") {
+    return await buyTicket(toolInput.eventId);
+  } else if (toolName === "verify_ticket") {
+    return await verifyTicket(toolInput.tokenId);
+  } else if (toolName === "get_event_info") {
+    return await getEventInfo(toolInput.eventId);
+  } else if (toolName === "check_resale_price") {
+    return await checkResalePrice(toolInput.tokenId, toolInput.proposedPrice);
+  }
+}
+
+// ============ TOOL IMPLEMENTATIONS ============
+
+async function createEvent(input: any) {
+  return {
+    verdict: "NOT IMPLEMENTED ❌",
+    details: "Event creation requires UI form (organizer dashboard). Contract function exists but needs frontend integration.",
+  };
+}
+
+async function buyTicket(eventId: number) {
+  try {
+    const eventDetails = await contract.getEventDetails(eventId);
+
+    if (!eventDetails.active) {
+      return {
+        verdict: "NOT AVAILABLE ❌",
+        details: "Event is not active",
+      };
+    }
+
+    return {
+      verdict: "READY TO BUY ✅",
+      details: {
+        eventName: eventDetails.name,
+        location: eventDetails.location,
+        ticketPrice: ethers.formatEther(eventDetails.ticketPrice) + " ETH",
+        ticketsRemaining: Number(eventDetails.totalTickets) - Number(eventDetails.ticketsSold),
+      },
+    };
+  } catch (error) {
+    return {
+      verdict: "NOT FOUND ❓",
+      details: `Could not fetch event: ${error}`,
+    };
+  }
+}
+
+async function verifyTicket(tokenId: number) {
+  try {
+    const isValid = await contract.verifyTicket(tokenId);
+
+    if (!isValid) {
+      return {
+        verdict: "FAKE ❌",
+        details: `Ticket ${tokenId} does not exist on-chain.`,
+      };
+    }
+
+    const details = await contract.getTicketDetails(tokenId);
+
+    return {
+      verdict: "VALID ✅",
+      details: {
+        ticketID: details.ticketID.toString(),
+        eventID: details.eventID.toString(),
+        faceValue: ethers.formatEther(details.faceValue) + " ETH",
+        redeemed: details.redeemed,
+        forSale: details.forSale,
+      },
+    };
+  } catch (error) {
+    return {
+      verdict: "NOT FOUND ❓",
+      details: `Could not verify ticket: ${error}`,
+    };
+  }
+}
+
+async function getEventInfo(eventId: number) {
+  try {
+    const event = await contract.getEventDetails(eventId);
+
+    return {
+      verdict: "FOUND ✅",
+      details: {
+        name: event.name,
+        location: event.location,
+        organizer: event.organizer,
+        ticketPrice: ethers.formatEther(event.ticketPrice) + " ETH",
+        ticketsSold: Number(event.ticketsSold),
+        totalTickets: Number(event.totalTickets),
+        remaining: Number(event.totalTickets) - Number(event.ticketsSold),
+        active: event.active,
+      },
+    };
+  } catch (error) {
+    return {
+      verdict: "NOT FOUND ❓",
+      details: `Event not found: ${error}`,
+    };
+  }
+}
+
+async function checkResalePrice(tokenId: number, proposedPrice: number) {
+  try {
+    const details = await contract.getTicketDetails(tokenId);
+    const faceValue = Number(details.faceValue);
+    const maxAllowed = (faceValue * 150) / 100;
+
+    if (proposedPrice > maxAllowed) {
+      return {
+        verdict: "BLOCKED 🚫",
+        details: `Price ${proposedPrice} wei exceeds 1.5x cap of ${maxAllowed} wei. Scalper detected!`,
+      };
+    }
+
+    return {
+      verdict: "ALLOWED ✅",
+      details: `Price is within 1.5x cap. Fair resale.`,
+    };
+  } catch (error) {
+    return {
+      verdict: "NOT FOUND ❓",
+      details: `Could not check price: ${error}`,
+    };
+  }
+}

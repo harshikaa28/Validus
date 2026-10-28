@@ -207,8 +207,22 @@ export default function Home() {
             </div>
           </div>
 
-          {/* Top-Right Header: Wallet Component */}
+          {/* Top-Right Header: Wallet Component & Dashboard Links */}
           <div className="flex items-center gap-2.5">
+            <a
+              href="/buyer"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-pink-500/30 bg-pink-500/10 text-pink-400 hover:bg-pink-500/20 text-xs font-semibold transition-all hover:scale-105"
+            >
+              <Ticket className="size-3.5" />
+              <span>Buyer Dashboard</span>
+            </a>
+            <a
+              href="/organizer"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-pink-500/30 bg-pink-500/10 text-pink-400 hover:bg-pink-500/20 text-xs font-semibold transition-all hover:scale-105"
+            >
+              <Ticket className="size-3.5" />
+              <span>Organizer Dashboard</span>
+            </a>
             <HeaderWallet
               wallet={wallet}
               onRefresh={loadWallet}

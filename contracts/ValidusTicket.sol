@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import "@openzeppelin/contracts/token/ERC721/extensions/ERC721Enumerable.sol";
+import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
@@ -10,29 +10,29 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
  * @dev Production-ready ERC-721 smart contract for the Validus NFT Ticketing Platform.
  *
  * Core Features:
- *  - Enforces ERC-721 standard with enumeration support (ERC721Enumerable).
+ *  - ERC-721 standard NFT tickets.
  *  - Anti-scalping resale price cap: Resale price cannot exceed 1.5x (150%) of face value.
  *  - Organizer royalty: 5% of secondary sales automatically forwarded to event organizer.
  *  - Transfer restriction: Direct transfers can only be executed by the verified ticket owner.
  *  - On-chain authenticity and metadata verification.
  *  - Safe testnet/mainnet compatibility (Sepolia, Base Sepolia, Polygon/Amoy, etc.).
  */
-contract ValidusTicket is ERC721Enumerable, Ownable, ReentrancyGuard {
+contract ValidusTicket is ERC721, Ownable, ReentrancyGuard {
 
     // =========================================================================
     // Structs & Constants
     // =========================================================================
 
     struct TicketMetadata {
-        string ticketID;         // Off-chain/catalog ticket identifier (e.g., "TKT-001")
-        string eventID;          // Identifier of the event (e.g., "Coldplay-BLR-2026")
-        string seatNumber;       // Assigned seat/tier (e.g., "VIP-A12", "GA-FLOOR")
-        uint256 faceValue;       // Original primary sale price in wei
+        string ticketID;           // Off-chain/catalog ticket identifier (e.g., "TKT-001")
+        string eventID;            // Identifier of the event (e.g., "Coldplay-BLR-2026")
+        string seatNumber;         // Assigned seat/tier (e.g., "VIP-A12", "GA-FLOOR")
+        uint256 faceValue;         // Original primary sale price in wei
         address payable organizer; // Event organizer wallet receiving secondary royalties
-        bool isForSale;          // True if listed on secondary resale marketplace
-        uint256 resalePrice;     // Asking price in wei (capped at 1.5x faceValue)
-        bool isValid;            // Ticket validity status (false if invalidated/revoked)
-        bool isRedeemed;         // True once ticket is scanned/used at the event venue
+        bool isForSale;            // True if listed on secondary resale marketplace
+        uint256 resalePrice;       // Asking price in wei (capped at 1.5x faceValue)
+        bool isValid;              // Ticket validity status (false if invalidated/revoked)
+        bool isRedeemed;           // True once ticket is scanned/used at the event venue
     }
 
     /// @notice Royalty percentage paid to the event organizer on secondary sales (5%)
@@ -47,6 +47,28 @@ contract ValidusTicket is ERC721Enumerable, Ownable, ReentrancyGuard {
     /// @notice Auto-incrementing counter for unique token IDs
     uint256 private _nextTokenId = 1;
 
+    /// @notice Auto-incrementing counter for unique event IDs
+    uint256 private _nextEventId = 1;
+
+    // =========================================================================
+    // Event Struct
+    // =========================================================================
+
+    /**
+     * @notice On-chain representation of a ticketed event.
+     */
+    struct Event {
+        uint256 eventId;
+        string name;
+        string location;
+        uint256 eventDate;
+        address organizer;
+        uint256 ticketPrice;
+        uint256 totalTickets;
+        uint256 ticketsSold;
+        bool active;
+    }
+
     // =========================================================================
     // State Storage
     // =========================================================================
@@ -54,12 +76,28 @@ contract ValidusTicket is ERC721Enumerable, Ownable, ReentrancyGuard {
     /// @dev Mapping from on-chain token ID => TicketMetadata
     mapping(uint256 => TicketMetadata) private _tickets;
 
-    /// @dev Mapping from event ID => custom organizer address
+    /// @dev Mapping from event ID => on-chain Event data
+    mapping(uint256 => Event) private _events;
+
+    /// @dev Mapping from event ID => custom organizer address (string-keyed, kept for backwards compat)
     mapping(string => address payable) public eventOrganizers;
+
+    /// @dev Mapping to track if an event exists
+    mapping(uint256 => bool) public eventExists;
 
     // =========================================================================
     // Events
     // =========================================================================
+
+    event EventCreated(
+        uint256 indexed eventId,
+        string name,
+        string location,
+        uint256 eventDate,
+        address indexed organizer,
+        uint256 ticketPrice,
+        uint256 totalTickets
+    );
 
     event TicketMinted(
         uint256 indexed tokenId,
@@ -141,6 +179,61 @@ contract ValidusTicket is ERC721Enumerable, Ownable, ReentrancyGuard {
     // =========================================================================
 
     /**
+     * @notice Creates a new event on-chain.
+     * @dev Only the contract owner can create events.
+     * @param name Name of the event.
+     * @param location Location/venue of the event.
+     * @param eventDate Unix timestamp of the event date.
+     * @param ticketPrice Face value of tickets in wei.
+     * @param totalTickets Total number of tickets available.
+     * @return eventId Newly generated event identifier.
+     */
+    function createEvent(
+        string memory name,
+        string memory location,
+        uint256 eventDate,
+        uint256 ticketPrice,
+        uint256 totalTickets
+    ) external onlyOwner returns (uint256) {
+        uint256 eventId = _nextEventId++;
+        eventExists[eventId] = true;
+
+        _events[eventId] = Event({
+            eventId: eventId,
+            name: name,
+            location: location,
+            eventDate: eventDate,
+            organizer: msg.sender,
+            ticketPrice: ticketPrice,
+            totalTickets: totalTickets,
+            ticketsSold: 0,
+            active: true
+        });
+
+        emit EventCreated(eventId, name, location, eventDate, msg.sender, ticketPrice, totalTickets);
+
+        return eventId;
+    }
+
+    /**
+     * @notice Returns the total number of events created so far.
+     * @return count Number of events created (1-indexed, so the last valid ID equals count).
+     */
+    function totalEvents() external view returns (uint256) {
+        return _nextEventId - 1;
+    }
+
+    /**
+     * @notice Returns the on-chain details of an event.
+     * @param eventId The numeric event identifier (1-indexed).
+     * @return The Event struct containing all event metadata.
+     */
+    function getEventDetails(uint256 eventId) external view returns (Event memory) {
+        require(eventExists[eventId], "ValidusTicket: event does not exist");
+        return _events[eventId];
+    }
+
+    /**
      * @notice Sets the dedicated organizer address for a specific event.
      * @dev Only the contract owner can assign organizer addresses.
      * @param eventID Identifier of the event.
@@ -193,6 +286,22 @@ contract ValidusTicket is ERC721Enumerable, Ownable, ReentrancyGuard {
         });
 
         _safeMint(to, tokenID);
+
+        // Track tickets sold for the event if eventID matches a numeric on-chain event
+        // (Best-effort: parse the eventID string as a uint256; ignore if not numeric)
+        {
+            bool parsed = true;
+            uint256 evId = 0;
+            bytes memory idBytes = bytes(eventID);
+            for (uint256 i = 0; i < idBytes.length; i++) {
+                uint8 c = uint8(idBytes[i]);
+                if (c < 48 || c > 57) { parsed = false; break; }
+                evId = evId * 10 + (c - 48);
+            }
+            if (parsed && evId > 0 && eventExists[evId]) {
+                _events[evId].ticketsSold += 1;
+            }
+        }
 
         emit TicketMinted(
             tokenID,
@@ -347,20 +456,15 @@ contract ValidusTicket is ERC721Enumerable, Ownable, ReentrancyGuard {
     }
 
     /**
-     * @notice Returns complete metadata and state of a ticket.
+     * @notice Returns the descriptive metadata of a ticket (part 1 of 2).
      * @param tokenID On-chain ID of the ticket.
      * @return ticketID Alphanumeric ticket catalog reference.
      * @return eventID Event identification code.
      * @return seatNumber Assigned seat number.
      * @return faceValue Primary price in wei.
      * @return currentOwner Address of the token owner.
-     * @return organizer Address receiving event royalties.
-     * @return isForSale Whether ticket is currently available on secondary market.
-     * @return resalePrice Resale asking price in wei.
-     * @return isValid Authenticity/validity status.
-     * @return isRedeemed Whether ticket has been scanned/redeemed.
      */
-    function getTicketDetails(uint256 tokenID)
+    function getTicketInfo(uint256 tokenID)
         external
         view
         returns (
@@ -368,7 +472,28 @@ contract ValidusTicket is ERC721Enumerable, Ownable, ReentrancyGuard {
             string memory eventID,
             string memory seatNumber,
             uint256 faceValue,
-            address currentOwner,
+            address currentOwner
+        )
+    {
+        _requireTicketExists(tokenID);
+
+        TicketMetadata storage t = _tickets[tokenID];
+        return (t.ticketID, t.eventID, t.seatNumber, t.faceValue, ownerOf(tokenID));
+    }
+
+    /**
+     * @notice Returns the market and validity status of a ticket (part 2 of 2).
+     * @param tokenID On-chain ID of the ticket.
+     * @return organizer Address receiving event royalties.
+     * @return isForSale Whether ticket is currently available on secondary market.
+     * @return resalePrice Resale asking price in wei.
+     * @return isValid Authenticity/validity status.
+     * @return isRedeemed Whether ticket has been scanned/redeemed.
+     */
+    function getTicketStatus(uint256 tokenID)
+        external
+        view
+        returns (
             address organizer,
             bool isForSale,
             uint256 resalePrice,
@@ -378,19 +503,54 @@ contract ValidusTicket is ERC721Enumerable, Ownable, ReentrancyGuard {
     {
         _requireTicketExists(tokenID);
 
-        TicketMetadata memory ticket = _tickets[tokenID];
-        return (
-            ticket.ticketID,
-            ticket.eventID,
-            ticket.seatNumber,
-            ticket.faceValue,
-            ownerOf(tokenID),
-            ticket.organizer,
-            ticket.isForSale,
-            ticket.resalePrice,
-            ticket.isValid,
-            ticket.isRedeemed
-        );
+        TicketMetadata storage t = _tickets[tokenID];
+        return (t.organizer, t.isForSale, t.resalePrice, t.isValid, t.isRedeemed);
+    }
+
+    // -------------------------------------------------------------------------
+    // TicketDetails — flat struct returned by getTicketDetails().
+    // Using a struct avoids the "stack too deep" error that occurs when a
+    // function has more than ~7 local variables / return slots simultaneously.
+    // -------------------------------------------------------------------------
+    struct TicketDetails {
+        string ticketID;
+        string eventID;
+        string seatNumber;
+        uint256 faceValue;
+        address currentOwner;
+        address organizer;
+        bool isForSale;
+        uint256 resalePrice;
+        bool isValid;
+        bool isRedeemed;
+    }
+
+    /**
+     * @notice Returns combined ticket metadata and market status in a single call.
+     * @dev Returns a struct to avoid EVM "stack too deep" on 10 fields.
+     *      ethers.js decodes struct returns the same way as individual named
+     *      return values, so the frontend ABI does not need to change.
+     * @param tokenID On-chain ID of the ticket.
+     * @return details All ticket fields packed into a TicketDetails struct.
+     */
+    function getTicketDetails(uint256 tokenID)
+        external
+        view
+        returns (TicketDetails memory details)
+    {
+        _requireTicketExists(tokenID);
+
+        TicketMetadata storage t = _tickets[tokenID];
+        details.ticketID     = t.ticketID;
+        details.eventID      = t.eventID;
+        details.seatNumber   = t.seatNumber;
+        details.faceValue    = t.faceValue;
+        details.currentOwner = ownerOf(tokenID);
+        details.organizer    = t.organizer;
+        details.isForSale    = t.isForSale;
+        details.resalePrice  = t.resalePrice;
+        details.isValid      = t.isValid;
+        details.isRedeemed   = t.isRedeemed;
     }
 
     /**
@@ -423,14 +583,14 @@ contract ValidusTicket is ERC721Enumerable, Ownable, ReentrancyGuard {
     // =========================================================================
 
     /**
-     * @dev Overrides ERC721 and ERC721Enumerable update hook.
+     * @dev Overrides the ERC721 update hook.
      *      Enforces requirement: "Only owner can transfer their ticket"
      *      When an external caller invokes transferFrom/safeTransferFrom, `auth` represents
      *      the caller. We ensure `auth == from` so only the ticket owner can initiate transfers.
      */
     function _update(address to, uint256 tokenId, address auth)
         internal
-        override(ERC721, ERC721Enumerable)
+        override(ERC721)
         returns (address)
     {
         address from = _ownerOf(tokenId);
@@ -450,28 +610,6 @@ contract ValidusTicket is ERC721Enumerable, Ownable, ReentrancyGuard {
         }
 
         return super._update(to, tokenId, auth);
-    }
-
-    /**
-     * @dev Required override for balance tracking in ERC721Enumerable.
-     */
-    function _increaseBalance(address account, uint128 value)
-        internal
-        override(ERC721, ERC721Enumerable)
-    {
-        super._increaseBalance(account, value);
-    }
-
-    /**
-     * @dev Required override for ERC-165 interface detection.
-     */
-    function supportsInterface(bytes4 interfaceId)
-        public
-        view
-        override(ERC721, ERC721Enumerable)
-        returns (bool)
-    {
-        return super.supportsInterface(interfaceId);
     }
 
     /**

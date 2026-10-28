@@ -7,7 +7,7 @@
  *   3. If Gemini answers with text -> done.
  */
 import { GoogleGenAI, type Content, type Part } from "@google/genai";
-import { tools } from "./tools";
+import { tools, processToolCall } from "./tools";
 
 export const MODEL = process.env.GEMINI_MODEL || "gemini-flash-latest";
 const MAX_STEPS = 5;
@@ -41,10 +41,10 @@ export async function runAgent(history: ChatMessage[], ctx: { baseUrl: string })
         systemInstruction: SYSTEM_PROMPT,
         tools: [
           {
-            functionDeclarations: tools.map((t) => ({
+            functionDeclarations: tools.map((t: any) => ({
               name: t.name,
               description: t.description,
-              parametersJsonSchema: t.parameters,
+              parametersJsonSchema: t.inputSchema || t.parameters,
             })),
           },
         ],
@@ -59,12 +59,11 @@ export async function runAgent(history: ChatMessage[], ctx: { baseUrl: string })
     const results: Part[] = [];
 
     for (const call of calls) {
-      const tool = tools.find((t) => t.name === call.name);
       let result: unknown;
       let error = false;
       try {
-        if (!tool) throw new Error(`No tool named ${call.name}`);
-        result = await tool.run(call.args ?? {}, ctx);
+        if (!call.name) throw new Error("Missing tool call name");
+        result = await processToolCall(call.name, call.args ?? {});
       } catch (err) {
         result = { error: err instanceof Error ? err.message : String(err) };
         error = true;

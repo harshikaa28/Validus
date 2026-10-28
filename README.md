@@ -1,138 +1,213 @@
-# Validus AI Agent
+# Validus
 
-> Smart ticket verification and anti-scalping engine — built for the Agentmaxxing Hackathon (Oct 2026)
+Validus is a Web3 ticketing platform designed to stop fake tickets, reduce scalping, and give buyers and organizers more trust in live events. It combines an AI-powered verification assistant with on-chain ticketing logic to help users validate ticket authenticity, enforce resale caps, and manage ticket inventory securely.
 
-Validus is an AI agent that protects fans from fake tickets and predatory scalpers. You chat with it in plain English, it calls the right tool, and it gives you a clear verdict: VALID ✅, FAKE ❌, ALLOWED ✅, or BLOCKED 🚫.
+Built with Next.js, Google Gemini, and Solidity, Validus brings together conversational AI and blockchain-based ticket trust for a modern event experience.
 
-Built on the Agentmaxxing starter kit using Google Gemini and Next.js.
+## Why Validus
 
----
+Ticket fraud and resale abuse are common in the live events market. Buyers often struggle to tell whether a ticket is real, and organizers lose control when tickets are resold at inflated prices. Validus solves this by:
 
-## What Validus Does
+- Verifying ticket authenticity in natural language
+- Detecting suspicious resale behavior and anti-scalping violations
+- Enforcing resale price limits to reduce exploitation
+- Giving organizers a cleaner way to manage event listings and sales
+- Supporting wallet-connected ticket purchasing through a blockchain-ready flow
 
-- **Verifies tickets** — checks if a ticket ID is real or fake against a registry
-- **Bulk verification** — paste several ticket IDs and get a verdict for each
-- **Resale price cap** — blocks listings that exceed 1.5x the face value
-- **Scalper detection** — flags sellers with 4 or more active listings for the same event (Rule S1)
-- **Event info** — returns event name, date, venue, and remaining tickets
+## Key Features
 
----
+- AI ticket verification assistant for buyer queries
+- Ticket authenticity checks against known valid IDs
+- Secondary market price-cap enforcement
+- Anti-scalping detection logic for repeat listings
+- Buyer dashboard to inspect event and ticket data
+- Organizer dashboard for creating and tracking events
+- Sepolia-based smart contract integration for on-chain ticketing
+- MetaMask wallet connectivity for Web3 interactions
 
-## Week 1 (Current State)
+## How It Works
 
-This is the Week 1 submission for the Agentmaxxing Hackathon. The agent is fully working with all five tools above, but uses a **mock database** instead of real blockchain data. This was intentional: the goal for Week 1 was to ship a working AI agent with tool use, not to build full blockchain infrastructure.
+Validus combines three layers:
 
-**What is mock:**
-- Ticket data (hardcoded in `agent/tools.ts`)
-- Seller listings and event info
+1. Frontend experience in Next.js
+   - Buyer UI
+   - Organizer UI
+   - Wallet-driven actions
 
-**What is real:**
-- AI agent loop (Gemini + tool calling)
-- All five tools with correct logic
-- Agent wallet on Base Sepolia (testnet)
-- Anti-scalping rules (1.5x cap, 4+ listings flag)
+2. AI agent layer with Gemini
+   - Parses customer prompts in plain English
+   - Calls the right verification tool
+   - Returns a clear verdict and actionable recommendation
 
----
+3. Contract layer on Ethereum-compatible networks
+   - Event creation
+   - Ticket minting and ownership tracking
+   - Secondary sale controls
+   - Royalty and resale guardrails
 
-## Roadmap
+## Tech Stack
 
-| Week | Dates | Plan |
-|------|-------|------|
-| Week 1 | Oct 8–9 | ✅ Working AI agent with mock data, tool use, anti-scalping logic |
-| Week 2 | Oct 12–16 | Replace mock data with real blockchain queries (Base Sepolia, thirdweb) |
-| Week 3 | Oct 19–23 | NFT ticket minting, dynamic QR codes, wallet-based transfers |
-| Week 4 | Oct 24–25 | Full demo, organiser dashboard, final polish |
+- Next.js 16
+- React 19
+- TypeScript
+- Tailwind CSS
+- Google GenAI / Gemini
+- Hardhat
+- Solidity 0.8.x
+- OpenZeppelin ERC-721 contracts
+- Ethers.js + viem
+- MetaMask / Sepolia wallet support
 
----
+## Repository Structure
 
-## Try It
+```text
+validus-week1/
+├── agent/
+│   ├── agent.ts
+│   ├── tools.ts
+│   └── wallet.ts
+├── app/
+│   ├── api/
+│   ├── buyer/
+│   ├── organizer/
+│   ├── globals.css
+│   ├── layout.tsx
+│   └── page.tsx
+├── components/
+│   ├── BuyerDashboard.tsx
+│   ├── EventOrganizerDashboard.tsx
+│   └── ui/
+├── contracts/
+│   └── ValidusTicket.sol
+├── lib/
+│   ├── sepolia.ts
+│   └── utils.ts
+├── public/
+├── scripts/
+├── .env.example
+├── AGENTS.md
+├── LICENSE
+├── README.md
+├── components.json
+├── hardhat.config.js
+├── next.config.ts
+├── package.json
+├── postcss.config.mjs
+├── tsconfig.json
+└── ...
+```
 
-Once the app is running, test these prompts in the chat:
+## Smart Contract Overview
 
-| Prompt | What happens |
-|--------|-------------|
-| `Is TKT-001 real?` | Agent verifies the ticket → VALID ✅ |
-| `Is FAKE-666 real?` | Agent verifies the ticket → FAKE ❌ |
-| `Check these tickets: TKT-001, TKT-002, FAKE-666` | Agent bulk verifies all three |
-| `Is a resale ticket with face value 5000 and listing price 8000 allowed?` | Agent checks resale cap → BLOCKED 🚫 |
-| `Is seller SELL-001 a scalper for Coldplay @Bangalore Oct 15?` | Agent flags the seller → FLAGGED |
-| `How many tickets are left for Coldplay @Bangalore Oct 15?` | Agent returns event info |
+The contract in `contracts/ValidusTicket.sol` implements an ERC-721 ticketing system with extra controls:
 
----
+- Event creation with organizer metadata
+- NFT-based ticket minting
+- Resale restrictions
+- Price caps based on face value
+- Secondary sale royalty distribution
+- Ticket validity and redemption tracking
 
-## Setup
+This gives Validus a reliable, auditable foundation for ticket ownership and resale logic.
+
+## Getting Started
 
 ### Prerequisites
-- Node.js 20 or newer (`node -v` to check)
-- A free Gemini API key from [Google AI Studio](https://aistudio.google.com/apikey)
 
-### Run locally
+- Node.js 20+
+- npm
+- A Google AI Studio API key for Gemini
+- MetaMask or another Web3 wallet for blockchain interactions
+- A Sepolia wallet with test ETH for contract interaction
+
+### Installation
 
 ```bash
 git clone https://github.com/harshikaa28/Validus.git
 cd Validus
-npm i
+npm install
 ```
 
-Add your Gemini API key to `.env`:
+### Environment Setup
+
+Copy the example environment file and add your credentials:
+
+```bash
+cp .env.example .env
+```
+
+Then update `.env` with your values:
 
 ```bash
 GEMINI_API_KEY=your_key_here
-GEMINI_MODEL=gemini-3.8-flash
+GEMINI_MODEL=gemini-flash-latest
+WALLET_PRIVATE_KEY=
 ```
 
-Start the app:
+> Leave `WALLET_PRIVATE_KEY` empty unless you intentionally want to use a known test wallet. If blank, the app can create a wallet from the UI for demo use.
+
+### Run the App
 
 ```bash
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000), click **Create Wallet**, and start chatting.
+Then open:
 
----
+- http://localhost:3000
+- http://localhost:3000/buyer
+- http://localhost:3000/organizer
 
-## Project Structure
+## Usage Examples
 
-| Path | Description |
-|------|-------------|
-| `agent/tools.ts` | All five Validus tools — edit this to add or change tools |
-| `agent/agent.ts` | Agent loop and system prompt |
-| `agent/wallet.ts` | Wallet creation and payment signing |
-| `app/page.tsx` | Frontend UI |
-| `app/api/agent/route.ts` | Server endpoint that runs the agent |
-| `.env` | Your API key and model config (never commit this) |
-| `.agent-wallet.json` | Agent wallet (never commit this) |
+Try prompts such as:
 
----
+- "Verify ticket TKT-001"
+- "Is this resale price fair?"
+- "Is FAKE-666 a valid ticket?"
+- "Check if this seller is violating the resale cap"
+- "How many tickets are left for this event?"
 
-## Tech Stack
+The AI agent interprets the request and decides which tool or on-chain check is needed.
 
-- [Next.js](https://nextjs.org) — app and API routes
-- [Google Gemini](https://aistudio.google.com) — AI agent with tool calling
-- [viem](https://viem.sh) — wallet creation and Base Sepolia
-- [Tailwind CSS](https://tailwindcss.com) + [shadcn/ui](https://ui.shadcn.com) — UI
+## Development Notes
 
----
+### Run contract compile checks
 
-## What I Learned (Week 1)
+```bash
+npx hardhat compile
+```
 
-- How AI agents differ from chatbots: agents decide which tool to call based on the user's message
-- How tool calling works: the agent loop sends tools to Gemini, Gemini picks one, the `run` function executes, and the result goes back to Gemini
-- How to write tool descriptions that help the model pick the right one
-- How a crypto wallet works at a basic level (key generation, Base Sepolia testnet)
-- How to build a Next.js app with API routes from a starter template
+### Build the app
 
----
+```bash
+npm run build
+```
 
-## Security
+### Start production server
 
-- Never commit `.env` or `.agent-wallet.json` — both are in `.gitignore`
-- This wallet is for testing only — never send real funds to it
-- Seed phrases and private keys stay offline
+```bash
+npm run start
+```
 
----
+## Security Notes
 
-## Built by
+- Never commit your `.env` file or wallet secrets.
+- Use a test wallet only for local or demo work.
+- Keep private keys offline whenever possible.
+- Only use Sepolia test ETH for testing, never real funds.
 
-Harshika — B.Tech CS (AI), Year 3
-Agentmaxxing Hackathon, October 2026
+## License
+
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+
+## Project Status
+
+Validus is an evolving proof-of-concept and demo application for safer ticketing in the Web3 era. It demonstrates how agentic AI and smart contracts can work together to improve trust, transparency, and fraud detection in live event ticketing.
+
+## Built For
+
+- Event organizers
+- Ticket marketplaces
+- Buyers who need confidence in ticket legitimacy
+- Developer experimentation around AI + blockchain + trust systems

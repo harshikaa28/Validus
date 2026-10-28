@@ -1,7 +1,7 @@
 import { ethers } from 'ethers';
 
-// Smart Contract Details - NEW CONTRACT
-const CONTRACT_ADDRESS = "0xd8b934580fcE35a11B58C6D73aDeE468a2833fa8";
+const CONTRACT_ADDRESS =
+  process.env.NEXT_PUBLIC_CONTRACT_ADDRESS || "0xf8e81D47203A594245E36C48e151709F0C19fBe8";
 const CONTRACT_ABI = [
   {
     "inputs": [
@@ -198,13 +198,78 @@ export async function processToolCall(toolName: string, toolInput: any) {
   }
 }
 
-// ============ TOOL IMPLEMENTATIONS ============
-
 async function createEvent(input: any) {
-  return {
-    verdict: "NOT IMPLEMENTED ❌",
-    details: "Event creation requires UI form (organizer dashboard). Contract function exists but needs frontend integration.",
-  };
+  try {
+    const { name, location, eventDate, ticketPrice, totalTickets } = input;
+    
+    // Check if agent wallet private key exists in environment
+    const privateKey = process.env.WALLET_PRIVATE_KEY;
+
+    if (privateKey) {
+      try {
+        const wallet = new ethers.Wallet(privateKey, provider);
+        const contractWithSigner = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, wallet);
+        
+        let priceWei: bigint;
+        if (typeof ticketPrice === "string") {
+          priceWei = ticketPrice.toLowerCase().includes("eth")
+            ? ethers.parseEther(ticketPrice.toLowerCase().replace("eth", "").trim())
+            : BigInt(ticketPrice);
+        } else {
+          priceWei = BigInt(ticketPrice);
+        }
+
+        const dateTimestamp = BigInt(eventDate || Math.floor(Date.now() / 1000) + 86400 * 7);
+        const ticketsSupply = BigInt(totalTickets || 100);
+
+        const tx = await contractWithSigner.createEvent(
+          name,
+          location,
+          dateTimestamp,
+          priceWei,
+          ticketsSupply,
+          { gasLimit: 500000n }
+        );
+
+        const receipt = await tx.wait(1);
+
+        return {
+          verdict: "EVENT CREATED ON-CHAIN ✅",
+          details: {
+            eventName: name,
+            location: location,
+            transactionHash: tx.hash,
+            etherscan: `https://sepolia.etherscan.io/tx/${tx.hash}`,
+            organizer: wallet.address,
+            dashboard: "/organizer",
+          },
+        };
+      } catch (txErr: any) {
+        console.warn("On-chain creation using backend key failed:", txErr);
+      }
+    }
+
+    return {
+      verdict: "READY TO DEPLOY IN DASHBOARD 🎟️",
+      details: {
+        message: "You can deploy this event on-chain using your MetaMask wallet on the Validus Organizer Studio at /organizer.",
+        dashboardUrl: "/organizer",
+        preparedEvent: {
+          name,
+          location,
+          eventDate: eventDate || new Date(Date.now() + 86400 * 7 * 1000).toISOString(),
+          ticketPrice: ticketPrice || "0.05 ETH",
+          totalTickets: totalTickets || 100,
+        },
+      },
+    };
+  } catch (error: any) {
+    return {
+      verdict: "CREATION ERROR ❌",
+      details: `Could not prepare event creation: ${error.message || error}`,
+      dashboardUrl: "/organizer",
+    };
+  }
 }
 
 async function buyTicket(eventId: number) {

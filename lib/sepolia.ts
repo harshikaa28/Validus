@@ -1,10 +1,10 @@
 import { ethers } from "ethers";
 
 export const DEFAULT_CONTRACT_ADDRESS =
-  process.env.NEXT_PUBLIC_CONTRACT_ADDRESS || "0xd9c393e7311e1667f0ea8c5c428b2a898247af54";
+  process.env.NEXT_PUBLIC_CONTRACT_ADDRESS || "0xa64e9ed54034bd804c878844ce838153ecc796aa";
 export const CONTRACT_ADDRESS_STORAGE_KEY = "validus_contract_address";
 // Version bump forces any browser holding the old address in localStorage to reset.
-export const CONTRACT_ADDRESS_STORAGE_VERSION = `4:${DEFAULT_CONTRACT_ADDRESS.toLowerCase()}`;
+export const CONTRACT_ADDRESS_STORAGE_VERSION = `5:${DEFAULT_CONTRACT_ADDRESS.toLowerCase()}`;
 
 export const SEPOLIA_RPC_URLS = [
   "https://sepolia-rpc.ethereum.org",

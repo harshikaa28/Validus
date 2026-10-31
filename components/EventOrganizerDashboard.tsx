@@ -72,7 +72,7 @@ export const SEPOLIA_CHAIN_ID_HEX = "0xaa36a7"; // 11155111 in hex
 export const SEPOLIA_CHAIN_ID_DEC = 11155111n;
 export const SEPOLIA_RPC_FALLBACKS = SEPOLIA_RPC_URLS;
 
-// Contract ABI — ValidusTicket @ 0xd9c393e7311e1667f0ea8c5c428b2a898247af54 (Sepolia)
+// Contract ABI — ValidusTicket @ 0xa64e9ed54034bd804c878844ce838153ecc796aa (Sepolia)
 export const CONTRACT_ABI = [
   // ── Write functions ────────────────────────────────────────────────────────
   {

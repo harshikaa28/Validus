@@ -34,7 +34,7 @@ const SEPOLIA_CHAIN_ID_HEX = "0xaa36a7";
 const EVENT_EXPLORER_URL = "https://sepolia.etherscan.io";
 const MAX_EVENT_ID_SCAN = 1_000;
 
-// ABI for ValidusTicket @ 0xd9c393e7311e1667f0ea8c5c428b2a898247af54 (Sepolia)
+// ABI for ValidusTicket @ 0xa64e9ed54034bd804c878844ce838153ecc796aa (Sepolia)
 // Object-form ABI — field names match the deployed contract exactly.
 const BUYER_ABI = [
   // getEventDetails — returns the Event struct
@@ -70,10 +70,15 @@ const BUYER_ABI = [
     stateMutability: "view",
     type: "function",
   },
-  // buyTicket — secondary-market purchase of a listed NFT ticket
+  // buyPrimaryTicket — primary-sale purchase: mints a new NFT ticket for the buyer
   {
-    inputs: [{ internalType: "uint256", name: "tokenID", type: "uint256" }],
-    name: "buyTicket",
+    inputs: [
+      { internalType: "uint256", name: "eventId",    type: "uint256" },
+      { internalType: "string",  name: "ticketID",   type: "string"  },
+      { internalType: "string",  name: "eventTag",   type: "string"  },
+      { internalType: "string",  name: "seatNumber", type: "string"  },
+    ],
+    name: "buyPrimaryTicket",
     outputs: [],
     stateMutability: "payable",
     type: "function",
@@ -192,6 +197,178 @@ function getErrorMessage(error: unknown): string {
     walletError.message ||
     "Something went wrong while communicating with MetaMask or Sepolia."
   );
+}
+
+/**
+ * Safely reads a named property from any value, including ethers.js error objects
+ * whose fields (reason, data, shortMessage …) are non-enumerable prototype getters.
+ * Spreading such an object into {} produces empty output — this avoids that trap.
+ */
+function getProp(obj: unknown, key: string): unknown {
+  if (obj == null || typeof obj !== "object") return undefined;
+  try {
+    return (obj as Record<string, unknown>)[key];
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * ethers.Interface loaded with every custom error in ValidusTicket.
+ * Used by decodeBuyError to call iface.parseError(data) on raw revert bytes.
+ */
+const VALIDUS_ERROR_IFACE = new ethers.Interface([
+  "error TicketDoesNotExist(uint256 tokenId)",
+  "error UnauthorizedSeller(address caller, address actualOwner)",
+  "error OnlyTicketOwnerCanTransfer()",
+  "error PriceExceedsCap(uint256 proposedPrice, uint256 maxAllowedPrice)",
+  "error InvalidPrice()",
+  "error TicketNotForSale(uint256 tokenId)",
+  "error TicketAlreadyRedeemed(uint256 tokenId)",
+  "error TicketNotValid(uint256 tokenId)",
+  "error BuyerCannotBeSeller()",
+  "error InsufficientPayment(uint256 sent, uint256 required)",
+  "error PaymentFailed()",
+  "error ZeroAddressNotAllowed()",
+]);
+
+/**
+ * Walks the error object at three levels to find raw revert data:
+ *   error.data  →  error.info?.error?.data  →  error.error?.data
+ * Returns the first hex string found, or null.
+ */
+function extractRevertData(error: unknown): string | null {
+  const candidates = [
+    getProp(error, "data"),
+    getProp(getProp(getProp(error, "info"), "error"), "data"),
+    getProp(getProp(error, "error"), "data"),
+  ];
+  for (const c of candidates) {
+    if (typeof c === "string" && c.startsWith("0x") && c.length > 10) return c;
+  }
+  return null;
+}
+
+/**
+ * Attempts iface.parseError(data). Returns the decoded fragment or null.
+ */
+function tryParseError(data: string): { name: string; args: readonly unknown[] } | null {
+  try {
+    const decoded = VALIDUS_ERROR_IFACE.parseError(data);
+    if (decoded) return { name: decoded.name, args: decoded.args };
+  } catch { /* not a known error selector */ }
+  return null;
+}
+
+/**
+ * Maps a decoded ValidusTicket error name + args to a human-readable UI string.
+ */
+function formatDecodedError(name: string, args: readonly unknown[]): string {
+  const id = args[0] != null ? String(args[0]) : "";
+  switch (name) {
+    case "TicketDoesNotExist":
+      return `Revert: TicketDoesNotExist(tokenId=${id}) — no NFT exists with this token ID.`;
+    case "TicketNotForSale":
+      return `Revert: TicketNotForSale(tokenId=${id}) — this ticket is not listed for resale. It must first be listed via setResalePrice().`;
+    case "TicketNotValid":
+      return `Revert: TicketNotValid(tokenId=${id}) — this ticket has been invalidated or revoked.`;
+    case "TicketAlreadyRedeemed":
+      return `Revert: TicketAlreadyRedeemed(tokenId=${id}) — this ticket has already been used at the venue.`;
+    case "BuyerCannotBeSeller":
+      return "Revert: BuyerCannotBeSeller — you already own this ticket.";
+    case "InsufficientPayment": {
+      const sent     = args[0] != null ? ethers.formatEther(String(args[0])) : "?";
+      const required = args[1] != null ? ethers.formatEther(String(args[1])) : "?";
+      return `Revert: InsufficientPayment — sent ${sent} ETH but resale price is ${required} ETH.`;
+    }
+    case "PriceExceedsCap": {
+      const proposed = args[0] != null ? ethers.formatEther(String(args[0])) : "?";
+      const cap      = args[1] != null ? ethers.formatEther(String(args[1])) : "?";
+      return `Revert: PriceExceedsCap — proposed ${proposed} ETH exceeds the 1.5× cap of ${cap} ETH.`;
+    }
+    case "UnauthorizedSeller":
+      return `Revert: UnauthorizedSeller — caller ${args[0]} is not the ticket owner (${args[1]}).`;
+    case "OnlyTicketOwnerCanTransfer":
+      return "Revert: OnlyTicketOwnerCanTransfer — only the NFT owner can initiate a transfer.";
+    case "PaymentFailed":
+      return "Revert: PaymentFailed — ETH transfer to organizer or seller failed.";
+    case "ZeroAddressNotAllowed":
+      return "Revert: ZeroAddressNotAllowed — a zero address was passed where a real address is required.";
+    case "InvalidPrice":
+      return "Revert: InvalidPrice — the face value cannot be zero.";
+    default:
+      return `Contract reverted: ${name}(${args.map(String).join(", ")})`;
+  }
+}
+
+/**
+ * Decodes every custom error that ValidusTicket.buyTicket() can throw
+ * and returns a human-readable string for the UI.
+ *
+ * Primary path: extract raw revert data from the error object (at any nesting
+ * level), call iface.parseError() to get the decoded name + args, then map to
+ * a plain-English message.
+ *
+ * Fallback path: text-search across reason / shortMessage / message fields.
+ */
+function decodeBuyError(error: unknown): string {
+  if (error == null) return "An unexpected error occurred during the purchase.";
+
+  const code         = getProp(error, "code");
+  const reason       = getProp(error, "reason");
+  const shortMessage = getProp(error, "shortMessage");
+  const message      = getProp(error, "message");
+
+  // Wallet-layer errors don't have revert data
+  if (code === 4001 || code === "ACTION_REJECTED") return "Transaction cancelled in MetaMask.";
+  if (code === "INSUFFICIENT_FUNDS") return "Not enough Sepolia ETH to cover the price and gas.";
+
+  // ── Primary: ABI-decode the raw revert bytes ─────────────────────────────
+  const revertData = extractRevertData(error);
+  if (revertData) {
+    const decoded = tryParseError(revertData);
+    if (decoded) {
+      console.log("[buyTicket] Decoded error name:", decoded.name);
+      console.log("[buyTicket] Decoded error args:", decoded.args.map(String));
+      return formatDecodedError(decoded.name, decoded.args);
+    }
+    // Known data but unrecognised selector — still useful
+    console.log("[buyTicket] Unrecognised revert data:", revertData);
+  }
+
+  // ── Fallback: text-search across string fields ───────────────────────────
+  const info         = getProp(error, "info");
+  const innerError   = getProp(info, "error") ?? getProp(error, "error");
+  const innerMessage = String(getProp(innerError, "message") ?? "");
+
+  const searchText = [
+    String(reason       ?? ""),
+    String(shortMessage ?? ""),
+    String(message      ?? ""),
+    innerMessage,
+  ].join(" ").toLowerCase();
+
+  if (searchText.includes("ticketdoesnotexist"))  return "Revert: TicketDoesNotExist — no NFT exists with this token ID.";
+  if (searchText.includes("ticketnotforsale"))    return "Revert: TicketNotForSale — this token is not listed for resale. It must first be listed via setResalePrice().";
+  if (searchText.includes("ticketnotvalid"))      return "Revert: TicketNotValid — this ticket has been invalidated or revoked.";
+  if (searchText.includes("ticketalreadyredeemed")) return "Revert: TicketAlreadyRedeemed — this ticket has already been used at the venue.";
+  if (searchText.includes("buyercannotbeseller") || searchText.includes("buyercannot")) return "Revert: BuyerCannotBeSeller — you already own this ticket.";
+  if (searchText.includes("insufficientpayment")) return "Revert: InsufficientPayment — the ETH sent is less than the ticket's resale price.";
+  if (searchText.includes("priceexceedscap"))     return "Revert: PriceExceedsCap — resale price exceeds the 1.5× face-value cap.";
+  if (searchText.includes("reentrancy"))          return "Revert: ReentrancyGuardReentrantCall — concurrent purchase detected.";
+
+  if (reason       && String(reason).trim())       return `Contract reverted: ${reason}`;
+  if (shortMessage && String(shortMessage).trim()) return String(shortMessage);
+  if (innerMessage && innerMessage.trim())         return innerMessage;
+  if (message      && String(message).trim())      return String(message).slice(0, 300);
+
+  // Last resort: force-enumerate non-enumerable own properties
+  try {
+    const s = JSON.stringify(error, Object.getOwnPropertyNames(error as object));
+    if (s && s !== "{}") return `Transaction error: ${s.slice(0, 400)}`;
+  } catch { /* ignore */ }
+
+  return "An unexpected error occurred during the purchase. Check the browser console for details.";
 }
 
 async function ensureContractDeployed(
@@ -520,6 +697,8 @@ export default function BuyerDashboard() {
     if (!selectedEvent) return;
     setPurchaseError(null);
     setPurchaseSuccess(null);
+
+    // ── Guard: wallet must be connected ───────────────────────────────────────
     if (!window.ethereum) {
       setPurchaseError("MetaMask was not detected. Install MetaMask to purchase a ticket.");
       return;
@@ -533,20 +712,36 @@ export default function BuyerDashboard() {
     try {
       const provider = new ethers.BrowserProvider(window.ethereum);
       const network = await provider.getNetwork();
+
+      // ── Guard: must be on Sepolia ────────────────────────────────────────────
       if (network.chainId !== SEPOLIA_CHAIN_ID) {
         setWrongNetwork(true);
-        throw new Error("Switch MetaMask to Sepolia before purchasing.");
+        setPurchaseError("Your wallet is on the wrong network. Switch to Sepolia and try again.");
+        return;
       }
+
       await ensureContractDeployed(provider, contractAddress);
 
       const signer = await provider.getSigner();
       const contract = new ethers.Contract(contractAddress, BUYER_ABI, signer);
-      const transaction = await contract.buyTicket(selectedEvent.eventId, {
-        value: selectedEvent.ticketPrice,
-      });
+
+      // ── Primary-sale mint via buyPrimaryTicket ────────────────────────────────
+      // Generate deterministic-enough IDs from the event ID + current timestamp.
+      const ts       = Date.now();
+      const ticketID   = `TKT-${selectedEvent.eventId}-${ts}`;
+      const eventTag   = `EVT-${selectedEvent.eventId}`;
+      const seatNumber = `GA-${ts % 10000}`;
+
+      const transaction = await contract.buyPrimaryTicket(
+        selectedEvent.eventId,
+        ticketID,
+        eventTag,
+        seatNumber,
+        { value: selectedEvent.ticketPrice },
+      );
       const receipt = await transaction.wait();
       if (!receipt || receipt.status !== 1) {
-        throw new Error("The ticket purchase transaction did not succeed.");
+        throw new Error("The ticket purchase transaction did not succeed on-chain.");
       }
 
       setPurchaseSuccess({
@@ -555,9 +750,32 @@ export default function BuyerDashboard() {
       });
       setSelectedEvent(null);
       await Promise.all([loadEvents(), loadTickets(account)]);
-    } catch (error) {
-      console.error("Ticket purchase failed:", error);
-      setPurchaseError(getErrorMessage(error));
+    } catch (error: unknown) {
+      // ── Full revert diagnostics ──────────────────────────────────────────────
+      // Log the raw error object first — ethers puts revert info on non-enumerable
+      // prototype properties, so spreading into {} produces empty output.
+      console.error("[buyTicket] Transaction failed (raw):", error);
+
+      // Walk all three nesting levels for raw revert data, then ABI-decode it
+      const revertData = extractRevertData(error);
+      if (revertData) {
+        const decoded = tryParseError(revertData);
+        console.error("[buyTicket] Revert data:", revertData);
+        console.error("[buyTicket] Decoded error name:", decoded?.name ?? "(unrecognised selector)");
+        console.error("[buyTicket] Decoded error args:", decoded?.args.map(String) ?? []);
+      }
+
+      // Safely read each field regardless of whether they're own or prototype props
+      const reason       = getProp(error, "reason");
+      const data         = getProp(error, "data");
+      const shortMessage = getProp(error, "shortMessage");
+      const code         = getProp(error, "code");
+      const message      = getProp(error, "message");
+      const info         = getProp(error, "info");
+      const errorObj     = getProp(error, "error");
+      console.error("[buyTicket] Decoded fields:", { reason, data, shortMessage, code, message, info, errorObj });
+
+      setPurchaseError(decodeBuyError(error));
     } finally {
       setPurchaseEventId(null);
     }
@@ -956,24 +1174,35 @@ export default function BuyerDashboard() {
             </div>
             <button
               type="button"
-              onClick={buySelectedEvent}
+              onClick={!account ? connectWallet : wrongNetwork ? switchToSepolia : buySelectedEvent}
               disabled={
-                !selectedEvent.active ||
-                remainingTickets(selectedEvent) === 0n ||
-                purchaseEventId === selectedEvent.eventId
+                isConnecting ||
+                purchaseEventId === selectedEvent.eventId ||
+                (!account ? false /* clicking connects */ : wrongNetwork ? false /* clicking switches */ : (
+                  !selectedEvent.active || remainingTickets(selectedEvent) === 0n
+                ))
               }
               className="mt-5 flex w-full items-center justify-center gap-2 rounded-xl bg-pink-500 px-4 py-3 text-sm font-bold text-white transition hover:bg-pink-400 disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-400"
             >
               {purchaseEventId === selectedEvent.eventId
                 ? "Waiting for transaction…"
-                : remainingTickets(selectedEvent) === 0n
-                  ? "Sold out"
-                  : "Buy now"}
+                : !account
+                  ? "Connect wallet to buy"
+                  : wrongNetwork
+                    ? "Switch to Sepolia"
+                    : remainingTickets(selectedEvent) === 0n
+                      ? "Sold out"
+                      : "Buy now"}
               {purchaseEventId !== selectedEvent.eventId && <ArrowUpRight className="size-4" />}
             </button>
             {!account && (
               <p className="mt-3 text-center text-xs text-zinc-500">
-                Connect your wallet above before continuing to checkout.
+                Your wallet will be connected when you click the button above.
+              </p>
+            )}
+            {account && wrongNetwork && (
+              <p className="mt-3 text-center text-xs text-amber-400">
+                MetaMask is on the wrong network — click above to switch to Sepolia.
               </p>
             )}
           </section>

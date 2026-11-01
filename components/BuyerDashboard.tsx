@@ -117,6 +117,33 @@ const BUYER_ABI = [
     stateMutability: "view",
     type: "function",
   },
+  // setResalePrice — list or delist a ticket for resale
+  {
+    inputs: [
+      { internalType: "uint256", name: "tokenID", type: "uint256" },
+      { internalType: "uint256", name: "price",   type: "uint256" },
+    ],
+    name: "setResalePrice",
+    outputs: [],
+    stateMutability: "nonpayable",
+    type: "function",
+  },
+  // buyTicket — buy a ticket listed for resale on the secondary market
+  {
+    inputs: [{ internalType: "uint256", name: "tokenID", type: "uint256" }],
+    name: "buyTicket",
+    outputs: [],
+    stateMutability: "payable",
+    type: "function",
+  },
+  // ownerOf — ERC-721 owner query
+  {
+    inputs: [{ internalType: "uint256", name: "tokenId", type: "uint256" }],
+    name: "ownerOf",
+    outputs: [{ internalType: "address", name: "", type: "address" }],
+    stateMutability: "view",
+    type: "function",
+  },
 ] as const;
 
 type EventInfo = {
@@ -411,13 +438,18 @@ export default function BuyerDashboard() {
   const [eventFilter, setEventFilter] = useState<EventFilter>("all");
   const [selectedEvent, setSelectedEvent] = useState<EventInfo | null>(null);
   const [selectedTicket, setSelectedTicket] = useState<TicketInfo | null>(null);
+  const [resaleTicket, setResaleTicket] = useState<TicketInfo | null>(null);
+  const [resalePrice, setResalePrice] = useState<string>("");
   const [isLoadingEvents, setIsLoadingEvents] = useState(true);
   const [isLoadingTickets, setIsLoadingTickets] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
   const [purchaseEventId, setPurchaseEventId] = useState<bigint | null>(null);
+  const [resaleListingId, setResaleListingId] = useState<bigint | null>(null);
+  const [resaleBuyingId, setResaleBuyingId] = useState<bigint | null>(null);
   const [eventError, setEventError] = useState<string | null>(null);
   const [ticketError, setTicketError] = useState<string | null>(null);
   const [purchaseError, setPurchaseError] = useState<string | null>(null);
+  const [resaleError, setResaleError] = useState<string | null>(null);
   const [purchaseSuccess, setPurchaseSuccess] = useState<{
     eventName: string;
     transactionHash: string;
@@ -781,6 +813,140 @@ export default function BuyerDashboard() {
     }
   }
 
+  async function listTicketForResale() {
+    if (!resaleTicket || !account) return;
+    setResaleError(null);
+
+    if (!window.ethereum) {
+      setResaleError("MetaMask was not detected. Install MetaMask to list a ticket.");
+      return;
+    }
+
+    setResaleListingId(resaleTicket.tokenId);
+    try {
+      const provider = new ethers.BrowserProvider(window.ethereum);
+      const network = await provider.getNetwork();
+
+      if (network.chainId !== SEPOLIA_CHAIN_ID) {
+        setWrongNetwork(true);
+        setResaleError("Your wallet is on the wrong network. Switch to Sepolia and try again.");
+        return;
+      }
+
+      await ensureContractDeployed(provider, contractAddress);
+
+      const signer = await provider.getSigner();
+      const contract = new ethers.Contract(contractAddress, BUYER_ABI, signer);
+
+      // Validate price input
+      const priceEth = parseFloat(resalePrice);
+      if (!resalePrice || isNaN(priceEth) || priceEth <= 0) {
+        setResaleError("Please enter a valid price greater than zero.");
+        return;
+      }
+
+      const priceWei = ethers.parseEther(resalePrice);
+
+      // Check price cap: max 1.5x face value
+      const maxAllowed = (resaleTicket.faceValue * 150n) / 100n;
+      if (priceWei > maxAllowed) {
+        setResaleError(
+          `Price exceeds cap. Max allowed: ${ethers.formatEther(maxAllowed)} ETH (1.5× face value of ${ethers.formatEther(resaleTicket.faceValue)} ETH).`
+        );
+        return;
+      }
+
+      const transaction = await contract.setResalePrice(resaleTicket.tokenId, priceWei);
+      const receipt = await transaction.wait();
+      if (!receipt || receipt.status !== 1) {
+        throw new Error("The resale listing transaction did not succeed on-chain.");
+      }
+
+      setResaleError(null);
+      setResaleTicket(null);
+      setResalePrice("");
+      await loadTickets(account);
+    } catch (error: unknown) {
+      console.error("[setResalePrice] Transaction failed:", error);
+      const revertData = extractRevertData(error);
+      if (revertData) {
+        const decoded = tryParseError(revertData);
+        console.error("[setResalePrice] Decoded error name:", decoded?.name ?? "(unrecognised)");
+        console.error("[setResalePrice] Decoded error args:", decoded?.args.map(String) ?? []);
+        if (decoded) {
+          setResaleError(formatDecodedError(decoded.name, decoded.args));
+          setResaleListingId(null);
+          return;
+        }
+      }
+      setResaleError(getErrorMessage(error));
+    } finally {
+      setResaleListingId(null);
+    }
+  }
+
+  async function buyResaleTicket(tokenId: bigint) {
+    if (!account) return;
+    setResaleError(null);
+
+    if (!window.ethereum) {
+      setResaleError("MetaMask was not detected. Install MetaMask to purchase a ticket.");
+      return;
+    }
+
+    setResaleBuyingId(tokenId);
+    try {
+      const provider = new ethers.BrowserProvider(window.ethereum);
+      const network = await provider.getNetwork();
+
+      if (network.chainId !== SEPOLIA_CHAIN_ID) {
+        setWrongNetwork(true);
+        setResaleError("Your wallet is on the wrong network. Switch to Sepolia and try again.");
+        return;
+      }
+
+      await ensureContractDeployed(provider, contractAddress);
+
+      const signer = await provider.getSigner();
+      const contract = new ethers.Contract(contractAddress, BUYER_ABI, signer);
+
+      // Read the ticket status to get the current resale price
+      const ticketDetails = await contract.getTicketDetails(tokenId);
+      if (!ticketDetails.isForSale) {
+        setResaleError("This ticket is no longer listed for resale.");
+        return;
+      }
+
+      const resalePrice = BigInt(ticketDetails.resalePrice);
+
+      const transaction = await contract.buyTicket(tokenId, { value: resalePrice });
+      const receipt = await transaction.wait();
+      if (!receipt || receipt.status !== 1) {
+        throw new Error("The resale purchase transaction did not succeed on-chain.");
+      }
+
+      setResaleError(null);
+      setSelectedTicket(null);
+      await Promise.all([loadEvents(), loadTickets(account)]);
+    } catch (error: unknown) {
+      console.error("[buyTicket] Resale transaction failed:", error);
+      const revertData = extractRevertData(error);
+      if (revertData) {
+        const decoded = tryParseError(revertData);
+        console.error("[buyTicket] Decoded error name:", decoded?.name ?? "(unrecognised)");
+        console.error("[buyTicket] Decoded error args:", decoded?.args.map(String) ?? []);
+        if (decoded) {
+          setResaleError(formatDecodedError(decoded.name, decoded.args));
+          setResaleBuyingId(null);
+          return;
+        }
+      }
+      setResaleError(decodeBuyError(error));
+    } finally {
+      setResaleBuyingId(null);
+    }
+  }
+
   return (
     <main className="min-h-screen bg-[#09090b] pb-16 text-zinc-100">
       <div className="pointer-events-none fixed inset-0 z-0 bg-[radial-gradient(ellipse_75%_50%_at_50%_-15%,rgba(236,72,153,0.18),transparent_70%)]" />
@@ -1095,11 +1261,22 @@ export default function BuyerDashboard() {
                     </button>
                     <button
                       type="button"
-                      disabled
-                      title="Ticket resale listing will be available in Phase 3.5."
-                      className="rounded-xl border border-white/10 px-3 py-2 text-xs font-semibold text-zinc-500 disabled:cursor-not-allowed"
+                      onClick={() => {
+                        setResaleTicket(ticket);
+                        setResalePrice("");
+                        setResaleError(null);
+                      }}
+                      disabled={ticket.isRedeemed || !ticket.isValid}
+                      title={
+                        ticket.isRedeemed
+                          ? "Redeemed tickets cannot be resold."
+                          : !ticket.isValid
+                            ? "Invalid tickets cannot be resold."
+                            : "List this ticket for resale."
+                      }
+                      className="rounded-xl border border-pink-500/30 px-3 py-2 text-xs font-semibold text-pink-200 hover:bg-pink-500/10 disabled:border-white/10 disabled:text-zinc-500 disabled:cursor-not-allowed"
                     >
-                      List for resale
+                      {ticket.isForSale ? "Delist" : "List for resale"}
                     </button>
                   </div>
                 </article>
@@ -1259,11 +1436,161 @@ export default function BuyerDashboard() {
                   {ethers.formatEther(selectedTicket.faceValue)} ETH
                 </dd>
               </div>
-              <div className="flex justify-between gap-4">
+              <div className="flex justify-between gap-4 border-b border-white/[0.07] pb-3">
                 <dt className="text-zinc-400">Status</dt>
                 <dd className="font-semibold text-pink-200">{getTicketStatus(selectedTicket)}</dd>
               </div>
+              {selectedTicket.isForSale && (
+                <div className="flex justify-between gap-4 pb-3">
+                  <dt className="text-zinc-400">Resale price</dt>
+                  <dd className="font-mono font-bold text-emerald-200">
+                    {ethers.formatEther(selectedTicket.resalePrice)} ETH
+                  </dd>
+                </div>
+              )}
             </dl>
+
+            {/* Resale action buttons */}
+            {selectedTicket.isForSale && account && (
+              <div className="mt-6 space-y-2">
+                {resaleError && (
+                  <div role="alert" className="flex items-start gap-2 rounded-lg border border-rose-400/25 bg-rose-400/10 p-3 text-xs text-rose-100">
+                    <AlertCircle className="mt-0.5 size-3.5 shrink-0" />
+                    <span>{resaleError}</span>
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={() => buyResaleTicket(selectedTicket.tokenId)}
+                  disabled={resaleBuyingId === selectedTicket.tokenId}
+                  className="w-full rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-bold text-white transition hover:bg-emerald-500 disabled:cursor-wait disabled:opacity-60"
+                >
+                  {resaleBuyingId === selectedTicket.tokenId ? "Processing…" : `Buy for ${ethers.formatEther(selectedTicket.resalePrice)} ETH`}
+                </button>
+              </div>
+            )}
+          </section>
+        </div>
+      )}
+      {resaleTicket && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              setResaleTicket(null);
+              setResalePrice("");
+              setResaleError(null);
+            }
+          }}
+        >
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="resale-title"
+            className="w-full max-w-md rounded-3xl border border-pink-500/20 bg-[#111116] p-6 shadow-2xl shadow-pink-950/30"
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-[0.18em] text-pink-400">
+                  {resaleTicket.isForSale ? "Delist from" : "List for"} resale
+                </p>
+                <h2 id="resale-title" className="mt-2 text-2xl font-bold">
+                  {resaleTicket.eventID || resaleTicket.ticketID}
+                </h2>
+              </div>
+              <button
+                type="button"
+                aria-label="Close resale dialog"
+                onClick={() => {
+                  setResaleTicket(null);
+                  setResalePrice("");
+                  setResaleError(null);
+                }}
+                className="rounded-lg p-2 text-zinc-400 hover:bg-white/5 hover:text-white"
+              >
+                <X className="size-5" />
+              </button>
+            </div>
+
+            {/* Resale info */}
+            <div className="mt-4 space-y-2 rounded-lg border border-white/[0.07] bg-white/[0.02] p-3 text-sm">
+              <p className="flex justify-between">
+                <span className="text-zinc-400">Face value</span>
+                <span className="font-mono font-semibold text-zinc-200">
+                  {ethers.formatEther(resaleTicket.faceValue)} ETH
+                </span>
+              </p>
+              <p className="flex justify-between">
+                <span className="text-zinc-400">Max resale price (1.5×)</span>
+                <span className="font-mono font-semibold text-pink-300">
+                  {ethers.formatEther((resaleTicket.faceValue * 150n) / 100n)} ETH
+                </span>
+              </p>
+              {resaleTicket.isForSale && (
+                <p className="flex justify-between border-t border-white/[0.07] pt-2">
+                  <span className="text-zinc-400">Current price</span>
+                  <span className="font-mono font-bold text-emerald-300">
+                    {ethers.formatEther(resaleTicket.resalePrice)} ETH
+                  </span>
+                </p>
+              )}
+            </div>
+
+            {/* Price input (hidden if delisting) */}
+            {!resaleTicket.isForSale && (
+              <div className="mt-4">
+                <label className="block text-sm font-semibold text-zinc-300">
+                  Resale price (ETH)
+                </label>
+                <input
+                  type="number"
+                  step="0.001"
+                  min="0"
+                  placeholder="0.5"
+                  value={resalePrice}
+                  onChange={(e) => setResalePrice(e.target.value)}
+                  className="mt-2 w-full rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-sm font-mono placeholder-zinc-600 text-zinc-100 focus:border-pink-500/50 focus:outline-none"
+                />
+              </div>
+            )}
+
+            {/* Error message */}
+            {resaleError && (
+              <div role="alert" className="mt-4 flex items-start gap-2 rounded-lg border border-rose-400/25 bg-rose-400/10 p-3 text-xs text-rose-100">
+                <AlertCircle className="mt-0.5 size-3.5 shrink-0" />
+                <span>{resaleError}</span>
+              </div>
+            )}
+
+            {/* Action buttons */}
+            <div className="mt-6 flex gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setResaleTicket(null);
+                  setResalePrice("");
+                  setResaleError(null);
+                }}
+                className="flex-1 rounded-lg border border-white/10 px-4 py-2 text-sm font-semibold text-zinc-300 hover:border-white/20 hover:text-zinc-100"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={listTicketForResale}
+                disabled={
+                  resaleListingId === resaleTicket.tokenId ||
+                  (!resaleTicket.isForSale && (!resalePrice || isNaN(parseFloat(resalePrice))))
+                }
+                className="flex-1 rounded-lg bg-pink-500 px-4 py-2 text-sm font-bold text-white hover:bg-pink-400 disabled:cursor-wait disabled:opacity-60"
+              >
+                {resaleListingId === resaleTicket.tokenId
+                  ? "Processing…"
+                  : resaleTicket.isForSale
+                    ? "Delist"
+                    : "List for resale"}
+              </button>
+            </div>
           </section>
         </div>
       )}
